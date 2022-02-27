@@ -292,7 +292,7 @@ class TestDatabricksHook(unittest.TestCase):
     def test_do_api_call_patch(self, mock_requests):
         mock_requests.patch.return_value.json.return_value = {'cluster_name': 'new_name'}
         data = {'cluster_name': 'new_name'}
-        patched_cluster_name = self.hook._do_api_call(('PATCH', 'api/2.1/jobs/runs/submit'), data)
+        patched_cluster_name = self.hook._do_api_call(('PATCH', '2.1/jobs/runs/submit'), data)
 
         assert patched_cluster_name['cluster_name'] == 'new_name'
         mock_requests.patch.assert_called_once_with(

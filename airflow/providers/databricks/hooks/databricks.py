@@ -30,19 +30,24 @@ from typing import Any, Dict, List, Optional
 from airflow.exceptions import AirflowException
 from airflow.providers.databricks.hooks.databricks_base import BaseDatabricksHook
 
-RESTART_CLUSTER_ENDPOINT = ("POST", "api/2.0/clusters/restart")
-START_CLUSTER_ENDPOINT = ("POST", "api/2.0/clusters/start")
-TERMINATE_CLUSTER_ENDPOINT = ("POST", "api/2.0/clusters/delete")
+RESTART_CLUSTER_ENDPOINT = ("POST", "2.0/clusters/restart")
+START_CLUSTER_ENDPOINT = ("POST", "2.0/clusters/start")
+TERMINATE_CLUSTER_ENDPOINT = ("POST", "2.0/clusters/delete")
+LIST_CLUSTERS_ENDPOINT = ("GET", "2.0/clusters/list")
+CREATE_CLUSTER_ENDPOINT = ("POST", "2.0/clusters/create")
+DELETE_CLUSTER_ENDPOINT = ("POST", "2.0/clusters/permanent-delete")
+EDIT_CLUSTER_ENDPOINT = ("POST", "2.0/clusters/edit")
+GET_CLUSTER_ENDPOINT = ("GET", "2.0/clusters/get")
 
-RUN_NOW_ENDPOINT = ('POST', 'api/2.1/jobs/run-now')
-SUBMIT_RUN_ENDPOINT = ('POST', 'api/2.1/jobs/runs/submit')
-GET_RUN_ENDPOINT = ('GET', 'api/2.1/jobs/runs/get')
-CANCEL_RUN_ENDPOINT = ('POST', 'api/2.1/jobs/runs/cancel')
+RUN_NOW_ENDPOINT = ('POST', '2.1/jobs/run-now')
+SUBMIT_RUN_ENDPOINT = ('POST', '2.1/jobs/runs/submit')
+GET_RUN_ENDPOINT = ('GET', '2.1/jobs/runs/get')
+CANCEL_RUN_ENDPOINT = ('POST', '2.1/jobs/runs/cancel')
 
-INSTALL_LIBS_ENDPOINT = ('POST', 'api/2.0/libraries/install')
-UNINSTALL_LIBS_ENDPOINT = ('POST', 'api/2.0/libraries/uninstall')
+INSTALL_LIBS_ENDPOINT = ('POST', '2.0/libraries/install')
+UNINSTALL_LIBS_ENDPOINT = ('POST', '2.0/libraries/uninstall')
 
-LIST_JOBS_ENDPOINT = ('GET', 'api/2.1/jobs/list')
+LIST_JOBS_ENDPOINT = ('GET', '2.1/jobs/list')
 
 RUN_LIFE_CYCLE_STATES = ['PENDING', 'RUNNING', 'TERMINATING', 'TERMINATED', 'SKIPPED', 'INTERNAL_ERROR']
 
@@ -294,6 +299,33 @@ class DatabricksHook(BaseDatabricksHook):
         :param json: json dictionary containing cluster specification.
         """
         self._do_api_call(TERMINATE_CLUSTER_ENDPOINT, json)
+
+    def list_clusters(self) -> List[Dict[str, Any]]:
+        """
+        Returns list of all clusters
+        :return: list of clusters
+        """
+        return self._do_api_call(LIST_CLUSTERS_ENDPOINT).get("clusters", [])
+
+    def find_cluster_id_by_name(self, cluster_name: str):
+        """
+        Finds cluster id by its name. If there are multiple clusters with the same name, raises AirflowException.
+
+        :param cluster_name: The name of the cluster to look up.
+        :return: The cluster_id or None if no cluster was found.
+        """
+        all_clusters = self.list_clusters()
+        matching_clusters = [c for c in all_clusters if c.get("cluster_name", "") == cluster_name]
+
+        if len(matching_clusters) > 1:
+            raise AirflowException(
+                f"There are more than one cluster with name {cluster_name}. Please delete duplicated clusters first"
+            )
+
+        if not matching_clusters:
+            return None
+        else:
+            return matching_clusters[0]["cluster_id"]
 
     def install(self, json: dict) -> None:
         """

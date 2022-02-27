@@ -303,8 +303,7 @@ class BaseDatabricksHook(BaseHook):
         """
         method, endpoint = endpoint_info
 
-        # TODO: get rid of explicit 'api/' in the endpoint specification
-        url = f'https://{self.host}/{endpoint}'
+        url = f'https://{self.host}/api/{endpoint}'
 
         aad_headers = self._get_aad_headers()
         headers = {**USER_AGENT_HEADER.copy(), **aad_headers}

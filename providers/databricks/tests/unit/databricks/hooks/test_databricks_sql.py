@@ -629,3 +629,117 @@ def test_get_df(df_type, df_class, description):
             assert df.row(1)[0] == result_sets[1][0]
 
         assert isinstance(df, df_class)
+
+
+class TestDatabricksSqlHookSDKConfigIntegration:
+    """Test SDK Config integration in DatabricksSqlHook."""
+
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.sql")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.create_sdk_config_from_connection")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql._get_server_hostname")
+    def test_get_conn_uses_sdk_config(
+        self, mock_get_hostname, mock_create_config, mock_sql, mock_get_requests
+    ):
+        """Test that get_conn creates SDK Config and extracts token."""
+        # Setup
+        mock_get_hostname.return_value = HOST
+        mock_config = mock.MagicMock()
+        mock_credentials = {"Authorization": "Bearer test_token_value"}
+        mock_config.credentials_provider.return_value = mock_credentials
+        mock_create_config.return_value = mock_config
+
+        hook = DatabricksSqlHook(databricks_conn_id=DEFAULT_CONN_ID, http_path=HTTP_PATH)
+
+        # Get connection
+        hook.get_conn()
+
+        # Verify SDK Config was created
+        mock_create_config.assert_called_once()
+        call_args = mock_create_config.call_args
+        assert call_args[1]["base_hook"] == hook
+
+        # Verify user agent was set
+        assert mock_config.user_agent == hook.user_agent_value
+
+        # Verify token was extracted from credentials provider
+        mock_config.credentials_provider.assert_called_once()
+
+        # Verify sql.connect was called with extracted token
+        mock_sql.connect.assert_called_once()
+        call_args = mock_sql.connect.call_args
+        assert call_args[0][0] == HOST  # server_hostname
+        assert call_args[0][1] == HTTP_PATH  # http_path
+        assert call_args[0][2] == "test_token_value"  # token (extracted from Bearer)
+
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.sql")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.create_sdk_config_from_connection")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql._get_server_hostname")
+    def test_get_conn_with_catalog_and_schema(
+        self, mock_get_hostname, mock_create_config, mock_sql, mock_get_requests
+    ):
+        """Test get_conn passes catalog and schema to sql.connect."""
+        mock_get_hostname.return_value = HOST
+        mock_config = mock.MagicMock()
+        mock_config.credentials_provider.return_value = {"Authorization": "Bearer token"}
+        mock_create_config.return_value = mock_config
+
+        hook = DatabricksSqlHook(
+            databricks_conn_id=DEFAULT_CONN_ID,
+            http_path=HTTP_PATH,
+            catalog=CATALOG,
+            schema=SCHEMA,
+        )
+
+        hook.get_conn()
+
+        # Verify catalog and schema were passed
+        call_kwargs = mock_sql.connect.call_args[1]
+        assert call_kwargs["catalog"] == CATALOG
+        assert call_kwargs["schema"] == SCHEMA
+
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.sql")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.create_sdk_config_from_connection")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql._get_server_hostname")
+    def test_get_conn_caching(self, mock_get_hostname, mock_create_config, mock_sql, mock_get_requests):
+        """Test that connection is cached and reused."""
+        mock_get_hostname.return_value = HOST
+        mock_config = mock.MagicMock()
+        mock_config.credentials_provider.return_value = {"Authorization": "Bearer token"}
+        mock_create_config.return_value = mock_config
+
+        hook = DatabricksSqlHook(databricks_conn_id=DEFAULT_CONN_ID, http_path=HTTP_PATH)
+
+        # Get connection multiple times
+        conn1 = hook.get_conn()
+        conn2 = hook.get_conn()
+        conn3 = hook.get_conn()
+
+        # SDK Config and sql.connect should be called only once
+        assert mock_create_config.call_count == 1
+        assert mock_sql.connect.call_count == 1
+        assert conn1 == conn2 == conn3
+
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.sql")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql.create_sdk_config_from_connection")
+    @mock.patch("airflow.providers.databricks.hooks.databricks_sql._get_server_hostname")
+    def test_get_conn_with_session_configuration(
+        self, mock_get_hostname, mock_create_config, mock_sql, mock_get_requests
+    ):
+        """Test get_conn passes session configuration."""
+        mock_get_hostname.return_value = HOST
+        mock_config = mock.MagicMock()
+        mock_config.credentials_provider.return_value = {"Authorization": "Bearer token"}
+        mock_create_config.return_value = mock_config
+
+        session_config = {"spark.sql.shuffle.partitions": "200"}
+        hook = DatabricksSqlHook(
+            databricks_conn_id=DEFAULT_CONN_ID,
+            http_path=HTTP_PATH,
+            session_configuration=session_config,
+        )
+
+        hook.get_conn()
+
+        # Verify session configuration was passed
+        call_kwargs = mock_sql.connect.call_args[1]
+        assert call_kwargs["session_configuration"] == session_config

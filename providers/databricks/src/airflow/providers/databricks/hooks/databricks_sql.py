@@ -99,7 +99,6 @@ class DatabricksSqlHook(BaseDatabricksHook, DbApiHook):
     ) -> None:
         super().__init__(databricks_conn_id, caller=caller)
         self._sql_conn: Connection | None = None
-        self._token: str | None = None
         self._http_path = http_path
         self._sql_endpoint_name = sql_endpoint_name
         self.supports_autocommit = True
@@ -144,21 +143,33 @@ class DatabricksSqlHook(BaseDatabricksHook, DbApiHook):
                     "or sql_endpoint_name should be specified"
                 )
 
-        prev_token = self._token
-        new_token = self._get_token(raise_error=True)
-        if not self._token or new_token != self._token:
-            self._token = new_token
-
         if not self.session_config:
             self.session_config = self.databricks_conn.extra_dejson.get("session_configuration")
 
-        if not self._sql_conn or prev_token != new_token:
-            if self._sql_conn:  # close already existing connection
-                self._sql_conn.close()
+        # Create connection if it doesn't exist
+        # Note: We use SDK Config to handle authentication, then extract token for SQL connector
+        # This ensures consistent auth logic across all Databricks hooks
+        if not self._sql_conn:
+            from airflow.providers.databricks.hooks.databricks_credentials import (
+                _get_server_hostname,
+                create_sdk_config_from_connection,
+            )
+
+            # Create SDK Config from Airflow connection
+            sdk_config = create_sdk_config_from_connection(self.databricks_conn, base_hook=self)
+            sdk_config.user_agent = self.user_agent_value
+
+            # Extract token from SDK credential provider for SQL connector
+            # databricks-sql-connector v4.0+ doesn't support config parameter directly,
+            # so we extract the token and use the existing token-based API
+            credentials = sdk_config.credentials_provider()
+            token = credentials["Authorization"].replace("Bearer ", "")
+
+            # Pass token to SQL connector (existing API)
             self._sql_conn = sql.connect(
-                self.host,
+                _get_server_hostname(self.databricks_conn),
                 self._http_path,
-                self._token,
+                token,
                 schema=self.schema,
                 catalog=self.catalog,
                 session_configuration=self.session_config,

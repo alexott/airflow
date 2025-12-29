@@ -25,8 +25,10 @@ from functools import cached_property
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from databricks.sdk.service.workspace import ObjectType
+
 from airflow.providers.common.compat.sdk import AirflowException, BaseOperator
-from airflow.providers.databricks.hooks.databricks import DatabricksHook
+from airflow.providers.databricks.hooks.databricks_sdk import DatabricksSdkHook
 
 if TYPE_CHECKING:
     from airflow.providers.common.compat.sdk import Context
@@ -34,9 +36,9 @@ if TYPE_CHECKING:
 
 class DatabricksReposCreateOperator(BaseOperator):
     """
-    Creates, and optionally checks out, a Databricks Repo using the POST api/2.0/repos API endpoint.
+    Creates, and optionally checks out, a Databricks Repo using the Databricks SDK.
 
-     See: https://docs.databricks.com/dev-tools/api/latest/repos.html#operation/create-repo
+    See: https://docs.databricks.com/dev-tools/api/latest/repos.html#operation/create-repo
 
     :param git_url: Required HTTPS URL of a Git repository
     :param git_provider: Optional name of Git provider. Must be provided if we can't guess its name from URL.
@@ -46,13 +48,9 @@ class DatabricksReposCreateOperator(BaseOperator):
     :param tag: optional name of tag to checkout.
     :param ignore_existing_repo: don't throw exception if repository with given path already exists.
     :param databricks_conn_id: Reference to the :ref:`Databricks connection <howto/connection:databricks>`.
-        By default and in the common case this will be ``databricks_default``. To use
-        token based authentication, provide the key ``token`` in the extra field for the
-        connection and create the key ``host`` and leave the ``host`` field empty. (templated)
-    :param databricks_retry_limit: Amount of times retry if the Databricks backend is
-        unreachable. Its value must be greater than or equal to 1.
-    :param databricks_retry_delay: Number of seconds to wait between retries (it
-            might be a floating point number).
+        By default and in the common case this will be ``databricks_default``. (templated)
+    :param databricks_retry_limit: (Deprecated) Retry is now handled by the SDK.
+    :param databricks_retry_delay: (Deprecated) Retry is now handled by the SDK.
     """
 
     # Used in airflow.models.BaseOperator
@@ -116,13 +114,27 @@ class DatabricksReposCreateOperator(BaseOperator):
         return provider
 
     @cached_property
-    def _hook(self) -> DatabricksHook:
-        return DatabricksHook(
-            self.databricks_conn_id,
-            retry_limit=self.databricks_retry_limit,
-            retry_delay=self.databricks_retry_delay,
+    def _hook(self) -> DatabricksSdkHook:
+        return DatabricksSdkHook(
+            databricks_conn_id=self.databricks_conn_id,
             caller="DatabricksReposCreateOperator",
         )
+
+    def _get_repo_by_path(self, path: str) -> int | None:
+        """
+        Get repo ID by path using SDK.
+
+        :param path: Repository path
+        :return: Repo ID if exists, None otherwise
+        """
+        try:
+            status = self._hook.workspace_client.workspace.get_status(path)
+            if status.object_type == ObjectType.REPO:
+                return status.object_id
+        except Exception:
+            # If path doesn't exist or is not a repo, return None
+            pass
+        return None
 
     def execute(self, context: Context):
         """
@@ -131,38 +143,40 @@ class DatabricksReposCreateOperator(BaseOperator):
         :param context: context
         :return: Repo ID
         """
-        payload = {
-            "url": self.git_url,
-            "provider": self.git_provider,
-        }
-        if self.repo_path is not None:
-            if not self.__repos_path_regexp__.match(self.repo_path):
-                raise AirflowException(
-                    f"repo_path should have form of /Repos/{{folder}}/{{repo-name}}, got '{self.repo_path}'"
-                )
-            payload["path"] = self.repo_path
+        if self.repo_path is not None and not self.__repos_path_regexp__.match(self.repo_path):
+            raise AirflowException(
+                f"repo_path should have form of /Repos/{{folder}}/{{repo-name}}, got '{self.repo_path}'"
+            )
+
         existing_repo_id = None
         if self.repo_path is not None:
-            existing_repo_id = self._hook.get_repo_by_path(self.repo_path)
+            existing_repo_id = self._get_repo_by_path(self.repo_path)
             if existing_repo_id is not None and not self.ignore_existing_repo:
                 raise AirflowException(f"Repo with path '{self.repo_path}' already exists")
+
         if existing_repo_id is None:
-            result = self._hook.create_repo(payload)
-            repo_id = result["id"]
+            # Create repo using SDK
+            repo = self._hook.workspace_client.repos.create(
+                url=self.git_url,
+                provider=self.git_provider,
+                path=self.repo_path,
+            )
+            repo_id = repo.id
         else:
             repo_id = existing_repo_id
-        # update repo if necessary
+
+        # Update repo to specified branch or tag if necessary
         if self.branch is not None:
-            self._hook.update_repo(str(repo_id), {"branch": str(self.branch)})
+            self._hook.workspace_client.repos.update(repo_id=repo_id, branch=self.branch)
         elif self.tag is not None:
-            self._hook.update_repo(str(repo_id), {"tag": str(self.tag)})
+            self._hook.workspace_client.repos.update(repo_id=repo_id, tag=self.tag)
 
         return repo_id
 
 
 class DatabricksReposUpdateOperator(BaseOperator):
     """
-    Updates specified repository to a given branch or tag using the PATCH api/2.0/repos API endpoint.
+    Updates specified repository to a given branch or tag using the Databricks SDK.
 
     See: https://docs.databricks.com/dev-tools/api/latest/repos.html#operation/update-repo
 
@@ -171,13 +185,9 @@ class DatabricksReposUpdateOperator(BaseOperator):
     :param repo_id: optional ID of existing repository. Should be specified if ``repo_path`` is omitted
     :param repo_path: optional path of existing repository. Should be specified if ``repo_id`` is omitted
     :param databricks_conn_id: Reference to the :ref:`Databricks connection <howto/connection:databricks>`.
-        By default and in the common case this will be ``databricks_default``. To use
-        token based authentication, provide the key ``token`` in the extra field for the
-        connection and create the key ``host`` and leave the ``host`` field empty.  (templated)
-    :param databricks_retry_limit: Amount of times retry if the Databricks backend is
-        unreachable. Its value must be greater than or equal to 1.
-    :param databricks_retry_delay: Number of seconds to wait between retries (it
-            might be a floating point number).
+        By default and in the common case this will be ``databricks_default``. (templated)
+    :param databricks_retry_limit: (Deprecated) Retry is now handled by the SDK.
+    :param databricks_retry_delay: (Deprecated) Retry is now handled by the SDK.
     """
 
     # Used in airflow.models.BaseOperator
@@ -214,44 +224,55 @@ class DatabricksReposUpdateOperator(BaseOperator):
         self.tag = tag
 
     @cached_property
-    def _hook(self) -> DatabricksHook:
-        return DatabricksHook(
-            self.databricks_conn_id,
-            retry_limit=self.databricks_retry_limit,
-            retry_delay=self.databricks_retry_delay,
+    def _hook(self) -> DatabricksSdkHook:
+        return DatabricksSdkHook(
+            databricks_conn_id=self.databricks_conn_id,
             caller="DatabricksReposUpdateOperator",
         )
 
+    def _get_repo_by_path(self, path: str) -> int | None:
+        """
+        Get repo ID by path using SDK.
+
+        :param path: Repository path
+        :return: Repo ID if exists, None otherwise
+        """
+        try:
+            status = self._hook.workspace_client.workspace.get_status(path)
+            if status.object_type == ObjectType.REPO:
+                return status.object_id
+        except Exception:
+            # If path doesn't exist or is not a repo, return None
+            pass
+        return None
+
     def execute(self, context: Context):
         if self.repo_path is not None:
-            self.repo_id = self._hook.get_repo_by_path(self.repo_path)
+            self.repo_id = self._get_repo_by_path(self.repo_path)
             if self.repo_id is None:
                 raise AirflowException(f"Can't find Repo ID for path '{self.repo_path}'")
-        if self.branch is not None:
-            payload = {"branch": str(self.branch)}
-        else:
-            payload = {"tag": str(self.tag)}
 
-        result = self._hook.update_repo(str(self.repo_id), payload)
-        return result["head_commit_id"]
+        # Update repo using SDK
+        if self.branch is not None:
+            updated_repo = self._hook.workspace_client.repos.update(repo_id=int(self.repo_id), branch=self.branch)
+        else:
+            updated_repo = self._hook.workspace_client.repos.update(repo_id=int(self.repo_id), tag=self.tag)
+
+        return updated_repo.head_commit_id
 
 
 class DatabricksReposDeleteOperator(BaseOperator):
     """
-    Deletes specified repository using the DELETE api/2.0/repos API endpoint.
+    Deletes specified repository using the Databricks SDK.
 
     See: https://docs.databricks.com/dev-tools/api/latest/repos.html#operation/delete-repo
 
     :param repo_id: optional ID of existing repository. Should be specified if ``repo_path`` is omitted
     :param repo_path: optional path of existing repository. Should be specified if ``repo_id`` is omitted
     :param databricks_conn_id: Reference to the :ref:`Databricks connection <howto/connection:databricks>`.
-        By default and in the common case this will be ``databricks_default``. To use
-        token based authentication, provide the key ``token`` in the extra field for the
-        connection and create the key ``host`` and leave the ``host`` field empty. (templated)
-    :param databricks_retry_limit: Amount of times retry if the Databricks backend is
-        unreachable. Its value must be greater than or equal to 1.
-    :param databricks_retry_delay: Number of seconds to wait between retries (it
-            might be a floating point number).
+        By default and in the common case this will be ``databricks_default``. (templated)
+    :param databricks_retry_limit: (Deprecated) Retry is now handled by the SDK.
+    :param databricks_retry_delay: (Deprecated) Retry is now handled by the SDK.
     """
 
     # Used in airflow.models.BaseOperator
@@ -280,18 +301,33 @@ class DatabricksReposDeleteOperator(BaseOperator):
         self.repo_id = repo_id
 
     @cached_property
-    def _hook(self) -> DatabricksHook:
-        return DatabricksHook(
-            self.databricks_conn_id,
-            retry_limit=self.databricks_retry_limit,
-            retry_delay=self.databricks_retry_delay,
+    def _hook(self) -> DatabricksSdkHook:
+        return DatabricksSdkHook(
+            databricks_conn_id=self.databricks_conn_id,
             caller="DatabricksReposDeleteOperator",
         )
 
+    def _get_repo_by_path(self, path: str) -> int | None:
+        """
+        Get repo ID by path using SDK.
+
+        :param path: Repository path
+        :return: Repo ID if exists, None otherwise
+        """
+        try:
+            status = self._hook.workspace_client.workspace.get_status(path)
+            if status.object_type == ObjectType.REPO:
+                return status.object_id
+        except Exception:
+            # If path doesn't exist or is not a repo, return None
+            pass
+        return None
+
     def execute(self, context: Context):
         if self.repo_path is not None:
-            self.repo_id = self._hook.get_repo_by_path(self.repo_path)
+            self.repo_id = self._get_repo_by_path(self.repo_path)
             if self.repo_id is None:
                 raise AirflowException(f"Can't find Repo ID for path '{self.repo_path}'")
 
-        self._hook.delete_repo(str(self.repo_id))
+        # Delete repo using SDK
+        self._hook.workspace_client.repos.delete(repo_id=int(self.repo_id))

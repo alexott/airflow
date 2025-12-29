@@ -29,6 +29,7 @@ or the ``api/2.1/jobs/runs/submit``
 from __future__ import annotations
 
 import json
+import warnings
 from enum import Enum
 from typing import Any
 
@@ -737,10 +738,21 @@ class DatabricksHook(BaseDatabricksHook):
         """
         Update given Databricks Repos.
 
+        .. deprecated:: 8.0.0
+            This method is deprecated. Please use
+            :class:`~airflow.providers.databricks.hooks.databricks_sdk.DatabricksSdkHook`
+            with ``workspace_client.repos.update()`` instead.
+
         :param repo_id: ID of Databricks Repos
         :param json: payload
         :return: metadata from update
         """
+        warnings.warn(
+            "DatabricksHook.update_repo() is deprecated. "
+            "Use DatabricksSdkHook with workspace_client.repos.update() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         method, base_path = UPDATE_REPO_ENDPOINT
         repos_endpoint = (method, f"{base_path}/{repo_id}")
         return self._do_api_call(repos_endpoint, json)
@@ -749,9 +761,20 @@ class DatabricksHook(BaseDatabricksHook):
         """
         Delete given Databricks Repos.
 
+        .. deprecated:: 8.0.0
+            This method is deprecated. Please use
+            :class:`~airflow.providers.databricks.hooks.databricks_sdk.DatabricksSdkHook`
+            with ``workspace_client.repos.delete()`` instead.
+
         :param repo_id: ID of Databricks Repos
         :return:
         """
+        warnings.warn(
+            "DatabricksHook.delete_repo() is deprecated. "
+            "Use DatabricksSdkHook with workspace_client.repos.delete() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         method, base_path = DELETE_REPO_ENDPOINT
         repos_endpoint = (method, f"{base_path}/{repo_id}")
         self._do_api_call(repos_endpoint)
@@ -760,18 +783,40 @@ class DatabricksHook(BaseDatabricksHook):
         """
         Create a Databricks Repos.
 
+        .. deprecated:: 8.0.0
+            This method is deprecated. Please use
+            :class:`~airflow.providers.databricks.hooks.databricks_sdk.DatabricksSdkHook`
+            with ``workspace_client.repos.create()`` instead.
+
         :param json: payload
         :return:
         """
+        warnings.warn(
+            "DatabricksHook.create_repo() is deprecated. "
+            "Use DatabricksSdkHook with workspace_client.repos.create() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._do_api_call(CREATE_REPO_ENDPOINT, json)
 
     def get_repo_by_path(self, path: str) -> str | None:
         """
         Obtain Repos ID by path.
 
+        .. deprecated:: 8.0.0
+            This method is deprecated. Please use
+            :class:`~airflow.providers.databricks.hooks.databricks_sdk.DatabricksSdkHook`
+            with ``workspace_client.workspace.get_status()`` instead.
+
         :param path: path to a repository
         :return: Repos ID if it exists, None if doesn't.
         """
+        warnings.warn(
+            "DatabricksHook.get_repo_by_path() is deprecated. "
+            "Use DatabricksSdkHook with workspace_client.workspace.get_status() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         try:
             result = self._do_api_call(WORKSPACE_GET_STATUS_ENDPOINT, {"path": path}, wrap_http_errors=False)
             if result.get("object_type", "") == "REPO":
